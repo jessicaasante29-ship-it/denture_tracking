@@ -23,11 +23,26 @@ STATUSES = [
     "Completed", "Problem"
 ]
 
-COLUMNS = [
-    "Case ID", "Patient Code", "Clinic", "Denture Type",
-    "Status", "Notes", "AI Result", "Image File", "Created At"
+DELIVERY_STATUSES = [
+    "Not Sent",
+    "Ready for Pickup",
+    "Picked Up",
+    "In Transit",
+    "Arrived at Clinic",
+    "Delivered",
+    "Delayed",
+    "Problem"
 ]
 
+COLUMNS = [
+    "Case ID", "Patient Code", "Clinic", "Denture Type",
+    "Status", "Delivery Status", "Courier", "Tracking Number",
+    "Current Location", "Receiver", "Date Sent",
+    "Expected Delivery", "Notes", "AI Result",
+    "Image File", "Created At"
+]
+
+# ---------- DATA ----------
 def load_cases():
     try:
         df = pd.read_csv(DATA_FILE)
@@ -46,20 +61,21 @@ def save_case(case):
     df = pd.concat([df, pd.DataFrame([case])], ignore_index=True)
     save_all_cases(df)
 
+# ---------- AI ----------
 def ai_check_text(status, notes):
     notes_text = str(notes).lower()
 
     if status == "Problem":
         return "⚠️ Urgent review required."
 
-    if "crack" in notes_text or "broken" in notes_text or "mismatch" in notes_text:
-        return "⚠️ Possible defect detected from notes. Review before delivery."
+    if "crack" in notes_text or "broken" in notes_text:
+        return "⚠️ Possible defect detected."
 
     if status == "Quality Check":
-        return "🔍 Ready for final inspection."
+        return "🔍 Ready for inspection."
 
     if status == "Completed":
-        return "✅ Completed successfully."
+        return "✅ Completed."
 
     return "ℹ️ Normal workflow."
 
@@ -68,24 +84,25 @@ def analyze_image(uploaded_image, case_id):
         return "No image uploaded.", ""
 
     image = Image.open(uploaded_image).convert("RGB")
-    image_path = os.path.join(IMAGE_FOLDER, f"{case_id}.png")
-    image.save(image_path)
+    path = os.path.join(IMAGE_FOLDER, f"{case_id}.png")
+    image.save(path)
 
-    img_array = np.array(image)
-    gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+    img = np.array(image)
+    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
     edges = cv2.Canny(gray, 50, 150)
 
-    edge_score = np.sum(edges > 0) / edges.size
+    score = np.sum(edges > 0) / edges.size
 
-    if edge_score > 0.18:
-        result = "🧠 Image AI: High edge complexity detected. Review structure carefully."
-    elif edge_score > 0.08:
-        result = "🧠 Image AI: Moderate structure detected. Suitable for review."
+    if score > 0.18:
+        result = "🧠 Image AI: Complex structure, review carefully."
+    elif score > 0.08:
+        result = "🧠 Image AI: Moderate detail."
     else:
-        result = "🧠 Image AI: Low structure detail detected. Image may need retake."
+        result = "🧠 Image AI: Low detail, retake image."
 
-    return result, image_path
+    return result, path
 
+# ---------- LOGIN ----------
 def check_password():
     if "password_correct" not in st.session_state:
         st.session_state.password_correct = False
@@ -93,12 +110,10 @@ def check_password():
     if st.session_state.password_correct:
         return True
 
-    st.markdown("<h1 style='text-align:center;'>🦷 IKASEL Secure Login</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align:center;'>Denture Tracking + AI Support System</p>", unsafe_allow_html=True)
+    st.title("IKASEL Login")
+    password = st.text_input("Password", type="password")
 
-    password = st.text_input("Access Password", type="password")
-
-    if st.button("Login", use_container_width=True):
+    if st.button("Login"):
         if password == "Earth2026":
             st.session_state.password_correct = True
             st.rerun()
@@ -107,183 +122,113 @@ def check_password():
 
     return False
 
+# ---------- APP ----------
 if check_password():
-    st.sidebar.title("IKASEL System")
-    st.sidebar.success("Authenticated")
-    st.sidebar.info("Prototype: Tracking + Image AI + Reports")
 
-    st.title("🦷 IKASEL Denture Tracking Dashboard")
-    st.caption("Secure denture workflow tracking system with basic AI image support.")
+    st.title("🦷 IKASEL Denture Tracking + Delivery System")
 
-    st.warning(
-        "Use patient codes only. Do not enter full names, phone numbers, addresses, or detailed medical history."
-    )
+    st.warning("Use patient codes only. No personal data.")
 
     df_cases = load_cases()
 
-    col1, col2, col3, col4 = st.columns(4)
+    # ---------- METRICS ----------
+    col1, col2, col3 = st.columns(3)
     col1.metric("Total Cases", len(df_cases))
-    col2.metric("In Progress", len(df_cases[~df_cases["Status"].isin(["Completed", "Problem"])]) if not df_cases.empty else 0)
-    col3.metric("Completed", len(df_cases[df_cases["Status"] == "Completed"]) if not df_cases.empty else 0)
-    col4.metric("Problems", len(df_cases[df_cases["Status"] == "Problem"]) if not df_cases.empty else 0)
+    col2.metric("In Transit", len(df_cases[df_cases["Delivery Status"] == "In Transit"]) if not df_cases.empty else 0)
+    col3.metric("Delivered", len(df_cases[df_cases["Delivery Status"] == "Delivered"]) if not df_cases.empty else 0)
 
-    st.divider()
+    # ---------- ADD CASE ----------
+    st.subheader("➕ Add Case")
 
-    left, right = st.columns([1, 1.4])
+    uploaded_image = st.file_uploader("Upload Image", type=["jpg", "png"])
 
-    with left:
-        st.subheader("➕ Add New Denture Case")
+    with st.form("form"):
+        patient_code = st.text_input("Patient Code")
+        clinic = st.text_input("Clinic")
+        denture_type = st.selectbox("Type", ["Full", "Partial"])
+        status = st.selectbox("Workflow Status", STATUSES)
+        notes = st.text_area("Notes")
 
-        uploaded_image = st.file_uploader(
-            "Upload Denture Image",
-            type=["jpg", "jpeg", "png"]
-        )
+        submitted = st.form_submit_button("Save")
 
-        with st.form("case_form"):
-            patient_code = st.text_input("Patient Code", placeholder="P-0001")
-            clinic = st.text_input("Clinic / Hospital", placeholder="Clinic name")
-            denture_type = st.selectbox(
-                "Denture Type",
-                ["Full Denture", "Partial Denture", "Upper Denture", "Lower Denture", "Other"]
-            )
-            status = st.selectbox("Workflow Status", STATUSES)
-            notes = st.text_area("Notes", placeholder="Do not enter full patient identity")
+        if submitted:
+            case_id = f"IKJ-{len(df_cases)+1:04d}"
 
-            submitted = st.form_submit_button("Save Case", use_container_width=True)
+            ai_text = ai_check_text(status, notes)
+            img_text, path = analyze_image(uploaded_image, case_id)
 
-            if submitted:
-                if not patient_code or not clinic:
-                    st.error("Please enter Patient Code and Clinic Name.")
-                else:
-                    case_id = f"IKJ-{len(df_cases) + 1:04d}"
+            new_case = {
+                "Case ID": case_id,
+                "Patient Code": patient_code,
+                "Clinic": clinic,
+                "Denture Type": denture_type,
+                "Status": status,
+                "Delivery Status": "Not Sent",
+                "Courier": "",
+                "Tracking Number": "",
+                "Current Location": "",
+                "Receiver": "",
+                "Date Sent": "",
+                "Expected Delivery": "",
+                "Notes": notes,
+                "AI Result": ai_text + " | " + img_text,
+                "Image File": path,
+                "Created At": datetime.now().strftime("%Y-%m-%d %H:%M")
+            }
 
-                    text_ai = ai_check_text(status, notes)
-                    image_ai, image_path = analyze_image(uploaded_image, case_id)
+            save_case(new_case)
+            st.success("Saved")
+            st.rerun()
 
-                    final_ai = text_ai + " | " + image_ai
+    # ---------- TABLE ----------
+    st.subheader("📋 Cases")
+    st.dataframe(df_cases)
 
-                    new_case = {
-                        "Case ID": case_id,
-                        "Patient Code": patient_code,
-                        "Clinic": clinic,
-                        "Denture Type": denture_type,
-                        "Status": status,
-                        "Notes": notes,
-                        "AI Result": final_ai,
-                        "Image File": image_path,
-                        "Created At": datetime.now().strftime("%Y-%m-%d %H:%M")
-                    }
-
-                    save_case(new_case)
-                    st.success(f"{case_id} saved successfully")
-                    st.rerun()
-
-    with right:
-        st.subheader("🔍 Search & Filter")
-
-        search_term = st.text_input("Search by Patient Code or Clinic")
-        status_filter = st.selectbox("Filter by Status", ["All"] + STATUSES)
-
-        filtered_df = df_cases.copy()
-
-        if search_term and not filtered_df.empty:
-            filtered_df = filtered_df[
-                filtered_df["Patient Code"].astype(str).str.contains(search_term, case=False, na=False) |
-                filtered_df["Clinic"].astype(str).str.contains(search_term, case=False, na=False)
-            ]
-
-        if status_filter != "All" and not filtered_df.empty:
-            filtered_df = filtered_df[filtered_df["Status"] == status_filter]
-
-        st.dataframe(filtered_df, use_container_width=True, hide_index=True)
-
-        if not filtered_df.empty:
-            st.subheader("🧠 Latest AI Insight")
-            st.success(filtered_df.iloc[-1]["AI Result"])
-
-    st.divider()
-
-    st.subheader("🛠 Manage Cases")
+    # ---------- DELIVERY MANAGEMENT ----------
+    st.subheader("🚚 Delivery Tracking")
 
     df_all = load_cases()
 
     if not df_all.empty:
         for i, row in df_all.iterrows():
             with st.expander(f"{row['Case ID']} - {row['Patient Code']}"):
-                col_a, col_b = st.columns([1, 1])
 
-                with col_a:
-                    st.write(f"**Clinic:** {row['Clinic']}")
-                    st.write(f"**Denture Type:** {row['Denture Type']}")
-                    st.write(f"**Current Status:** {row['Status']}")
-                    st.write(f"**Notes:** {row['Notes']}")
-                    st.write(f"**AI Result:** {row['AI Result']}")
+                st.write("### Delivery Info")
 
-                    new_status = st.selectbox(
-                        "Update Status",
-                        STATUSES,
-                        index=STATUSES.index(row["Status"]) if row["Status"] in STATUSES else 0,
-                        key=f"status_{i}"
-                    )
+                delivery_status = st.selectbox(
+                    "Delivery Status",
+                    DELIVERY_STATUSES,
+                    index=DELIVERY_STATUSES.index(row["Delivery Status"]) if row["Delivery Status"] in DELIVERY_STATUSES else 0,
+                    key=f"ds_{i}"
+                )
 
-                    if st.button("Save Status", key=f"save_{i}"):
-                        df_all.at[i, "Status"] = new_status
-                        df_all.at[i, "AI Result"] = ai_check_text(new_status, row["Notes"])
-                        save_all_cases(df_all)
-                        st.success("Status updated")
-                        st.rerun()
+                courier = st.text_input("Courier", value=row["Courier"], key=f"c_{i}")
+                tracking = st.text_input("Tracking Number", value=row["Tracking Number"], key=f"t_{i}")
+                location = st.text_input("Current Location", value=row["Current Location"], key=f"l_{i}")
+                receiver = st.text_input("Receiver", value=row["Receiver"], key=f"r_{i}")
 
-                    if st.button("Delete Case", key=f"delete_{i}"):
-                        df_all = df_all.drop(i)
-                        save_all_cases(df_all)
-                        st.warning("Case deleted")
-                        st.rerun()
+                date_sent = st.date_input("Date Sent", key=f"d_{i}")
+                expected = st.date_input("Expected Delivery", key=f"e_{i}")
 
-                with col_b:
-                    image_file = str(row.get("Image File", ""))
+                if st.button("Update Delivery", key=f"u_{i}"):
+                    df_all.at[i, "Delivery Status"] = delivery_status
+                    df_all.at[i, "Courier"] = courier
+                    df_all.at[i, "Tracking Number"] = tracking
+                    df_all.at[i, "Current Location"] = location
+                    df_all.at[i, "Receiver"] = receiver
+                    df_all.at[i, "Date Sent"] = str(date_sent)
+                    df_all.at[i, "Expected Delivery"] = str(expected)
 
-                    if image_file and image_file != "nan" and os.path.exists(image_file):
-                        st.image(image_file, caption=f"Image for {row['Case ID']}", use_container_width=True)
-                    else:
-                        st.info("No image available for this case.")
-    else:
-        st.info("No cases available yet.")
+                    save_all_cases(df_all)
+                    st.success("Updated")
+                    st.rerun()
 
-    st.divider()
+    # ---------- CHART ----------
+    st.subheader("📊 Delivery Status Chart")
 
-    chart_col, export_col = st.columns([1.2, 1])
+    if not df_all.empty:
+        st.bar_chart(df_all["Delivery Status"].value_counts())
 
-    with chart_col:
-        st.subheader("📈 Status Summary")
-
-        df_all = load_cases()
-
-        if not df_all.empty:
-            st.bar_chart(df_all["Status"].value_counts())
-        else:
-            st.info("No case data yet.")
-
-    with export_col:
-        st.subheader("📤 Export Data")
-
-        csv = df_all.to_csv(index=False).encode("utf-8-sig")
-
-        st.download_button(
-            "Download CSV Report",
-            csv,
-            "denture_cases_report.csv",
-            "text/csv",
-            use_container_width=True
-        )
-
-        st.subheader("🧭 Workflow")
-        st.info("Received → Scanned → Designing → Manufacturing → Quality Check → Packed → Sent to Hospital → Completed")
-
-    st.divider()
-
-    st.subheader("📌 Patent / Invention Note")
-    st.info(
-        "This prototype demonstrates a workflow for denture case tracking, image-based review support, "
-        "status monitoring, audit-style records, and exportable reports. The advanced patent idea may focus "
-        "on the unique verification method, image-analysis logic, workflow automation, and secure traceability."
-    )
+    # ---------- EXPORT ----------
+    csv = df_all.to_csv(index=False).encode("utf-8")
+    st.download_button("Download CSV", csv, "delivery_report.csv")
